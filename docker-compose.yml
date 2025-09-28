@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  rate-limiter:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # IP rate limiting (requests per second)
+      - IP_RATE_LIMIT=10
+      - IP_BLOCK_TIME=300
+
+      # Token rate limiting (format: TOKEN_<token>_LIMIT=<limit>)
+      - TOKEN_ABC123_LIMIT=100
+      - TOKEN_ABC123_BLOCK_TIME=300
+      - TOKEN_XYZ789_LIMIT=50
+      - TOKEN_XYZ789_BLOCK_TIME=600
+
+      # Server configuration
+      - SERVER_PORT=8080
+    volumes:
+      - ./.env:/root/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rate-limiter-network
+
+networks:
+  rate-limiter-network:
+    driver: bridge
