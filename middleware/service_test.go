@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"os"
+	ratelimiter "rate-limiter"
+	"rate-limiter/storage"
 	"testing"
 	"time"
 
@@ -36,14 +38,14 @@ func TestLoadConfig(t *testing.T) {
 			os.Unsetenv(key)
 		}
 
-		config, err := LoadConfig()
+		config, err := storage.LoadConfig()
 		require.NoError(t, err)
 
-		assert.Equal(t, 10, config.IPRateLimit)
-		assert.Equal(t, 300, config.IPBlockTime)
-		assert.Equal(t, "8080", config.ServerPort)
-		assert.NotNil(t, config.TokenLimits)
-		assert.NotNil(t, config.TokenBlockTimes)
+		assert.Equal(t, 10, config.RateLimit.IPRateLimit)
+		assert.Equal(t, 300, config.RateLimit.IPBlockTime)
+		assert.Equal(t, "8080", config.RateLimit.ServerPort)
+		assert.NotNil(t, config.RateLimit.TokenLimits)
+		assert.NotNil(t, config.RateLimit.TokenBlockTimes)
 	})
 
 	t.Run("env_vars", func(t *testing.T) {
@@ -55,17 +57,17 @@ func TestLoadConfig(t *testing.T) {
 		os.Setenv("TOKEN_PROD_LIMIT", "200")
 		os.Setenv("TOKEN_PROD_BLOCK_TIME", "900")
 
-		config, err := LoadConfig()
+		config, err := storage.LoadConfig()
 		require.NoError(t, err)
 
-		assert.Equal(t, 20, config.IPRateLimit)
-		assert.Equal(t, 600, config.IPBlockTime)
-		assert.Equal(t, "9000", config.ServerPort)
+		assert.Equal(t, 20, config.RateLimit.IPRateLimit)
+		assert.Equal(t, 600, config.RateLimit.IPBlockTime)
+		assert.Equal(t, "9000", config.RateLimit.ServerPort)
 
-		assert.Equal(t, 50, config.TokenLimits["TEST"])
-		assert.Equal(t, 120, config.TokenBlockTimes["TEST"])
-		assert.Equal(t, 200, config.TokenLimits["PROD"])
-		assert.Equal(t, 900, config.TokenBlockTimes["PROD"])
+		assert.Equal(t, 50, config.RateLimit.TokenLimits["TEST"])
+		assert.Equal(t, 120, config.RateLimit.TokenBlockTimes["TEST"])
+		assert.Equal(t, 200, config.RateLimit.TokenLimits["PROD"])
+		assert.Equal(t, 900, config.RateLimit.TokenBlockTimes["PROD"])
 	})
 
 	t.Run("invalid_values", func(t *testing.T) {
@@ -73,40 +75,60 @@ func TestLoadConfig(t *testing.T) {
 		os.Setenv("IP_BLOCK_TIME", "not-a-number")
 		os.Setenv("TOKEN_INVALID_LIMIT", "abc")
 
-		config, err := LoadConfig()
+		config, err := storage.LoadConfig()
 		require.NoError(t, err)
 
-		assert.Equal(t, 10, config.IPRateLimit)
-		assert.Equal(t, 300, config.IPBlockTime)
+		assert.Equal(t, 10, config.RateLimit.IPRateLimit)
+		assert.Equal(t, 300, config.RateLimit.IPBlockTime)
 
-		_, exists := config.TokenLimits["INVALID"]
+		_, exists := config.RateLimit.TokenLimits["INVALID"]
 		assert.False(t, exists)
 	})
 }
 
 func TestGetDefaultConfig(t *testing.T) {
-	config := getDefaultConfig()
+	config := storage.GetDefaultConfig()
 
-	assert.Equal(t, 10, config.IPRateLimit)
-	assert.Equal(t, 300, config.IPBlockTime)
-	assert.Equal(t, "8080", config.ServerPort)
-	assert.NotNil(t, config.TokenLimits)
-	assert.NotNil(t, config.TokenBlockTimes)
-	assert.Equal(t, 0, len(config.TokenLimits))
-	assert.Equal(t, 0, len(config.TokenBlockTimes))
+	assert.Equal(t, 10, config.RateLimit.IPRateLimit)
+	assert.Equal(t, 300, config.RateLimit.IPBlockTime)
+	assert.Equal(t, "8080", config.RateLimit.ServerPort)
+	assert.NotNil(t, config.RateLimit.TokenLimits)
+	assert.NotNil(t, config.RateLimit.TokenBlockTimes)
+	assert.Equal(t, 0, len(config.RateLimit.TokenLimits))
+	assert.Equal(t, 0, len(config.RateLimit.TokenBlockTimes))
 }
 
 func TestNewService(t *testing.T) {
-	service := NewService()
+	testStorage := createTestStorage(t)
+	defer testStorage.Close()
+
+	appConfig := storage.GetDefaultConfig()
+	service := NewService(appConfig.RateLimit, testStorage)
 
 	assert.NotNil(t, service)
-	assert.NotNil(t, service.rateLimits)
-	assert.Equal(t, 0, len(service.rateLimits))
+	assert.NotNil(t, service.storage)
+}
+
+// createTestStorage creates a Redis storage for testing
+func createTestStorage(t *testing.T) ratelimiter.Storage {
+	config := ratelimiter.StorageConfig{
+		Host:     "localhost",
+		Port:     "6379",
+		Password: "",
+		DB:       1, // Use DB 1 for tests
+	}
+
+	redisStorage, err := storage.NewRedisStorage(config)
+	if err != nil {
+		t.Skipf("Redis not available for testing: %v", err)
+	}
+
+	return redisStorage
 }
 
 func TestServiceGetLimit(t *testing.T) {
 	service := &Service{
-		config: Config{
+		config: storage.Config{
 			IPRateLimit: 10,
 			TokenLimits: map[string]int{
 				"ABC123": 100,
@@ -157,7 +179,7 @@ func TestServiceGetLimit(t *testing.T) {
 
 func TestServiceGetBlockTime(t *testing.T) {
 	service := &Service{
-		config: Config{
+		config: storage.Config{
 			IPBlockTime: 300,
 			TokenBlockTimes: map[string]int{
 				"ABC123": 600,
@@ -204,7 +226,7 @@ func TestServiceShouldResetWindow(t *testing.T) {
 	service := &Service{}
 
 	t.Run("after_second", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			LastReset: time.Now().Add(-2 * time.Second),
 		}
 
@@ -213,7 +235,7 @@ func TestServiceShouldResetWindow(t *testing.T) {
 	})
 
 	t.Run("before_second", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			LastReset: time.Now().Add(-500 * time.Millisecond),
 		}
 
@@ -222,7 +244,7 @@ func TestServiceShouldResetWindow(t *testing.T) {
 	})
 
 	t.Run("exactly_second", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			LastReset: time.Now().Add(-1 * time.Second),
 		}
 
@@ -235,7 +257,7 @@ func TestServiceIsBlocked(t *testing.T) {
 	service := &Service{}
 
 	t.Run("not_blocked_zero", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			BlockedAt: time.Time{},
 		}
 
@@ -244,7 +266,7 @@ func TestServiceIsBlocked(t *testing.T) {
 	})
 
 	t.Run("blocked_within_time", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			BlockedAt: time.Now().Add(-100 * time.Second),
 		}
 
@@ -253,7 +275,7 @@ func TestServiceIsBlocked(t *testing.T) {
 	})
 
 	t.Run("not_blocked_time_passed", func(t *testing.T) {
-		rateLimit := &RateLimit{
+		rateLimit := &ratelimiter.RateLimit{
 			BlockedAt: time.Now().Add(-400 * time.Second),
 		}
 
@@ -264,30 +286,32 @@ func TestServiceIsBlocked(t *testing.T) {
 
 func TestServiceCheckRateLimit(t *testing.T) {
 	t.Run("new_client", func(t *testing.T) {
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
 		service := &Service{
-			config: Config{
+			config: storage.Config{
 				IPRateLimit: 5,
 				IPBlockTime: 300,
 			},
-			rateLimits: make(map[string]*RateLimit),
+			storage: testStorage,
 		}
 
 		allowed, err := service.CheckRateLimit("192.168.1.1", false)
 		require.NoError(t, err)
 		assert.True(t, allowed)
-
-		rateLimit, exists := service.rateLimits["192.168.1.1"]
-		require.True(t, exists)
-		assert.Equal(t, 1, rateLimit.Count)
 	})
 
 	t.Run("limit_exceeded", func(t *testing.T) {
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
 		service := &Service{
-			config: Config{
+			config: storage.Config{
 				IPRateLimit: 2,
 				IPBlockTime: 300,
 			},
-			rateLimits: make(map[string]*RateLimit),
+			storage: testStorage,
 		}
 
 		for i := 0; i < 2; i++ {
@@ -299,19 +323,19 @@ func TestServiceCheckRateLimit(t *testing.T) {
 		allowed, err := service.CheckRateLimit("192.168.1.2", false)
 		require.NoError(t, err)
 		assert.False(t, allowed)
-
-		rateLimit := service.rateLimits["192.168.1.2"]
-		assert.False(t, rateLimit.BlockedAt.IsZero())
 	})
 
 	t.Run("token_higher_limit", func(t *testing.T) {
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
 		service := &Service{
-			config: Config{
+			config: storage.Config{
 				IPRateLimit:     2,
 				TokenLimits:     map[string]int{"ABC123": 5},
 				TokenBlockTimes: map[string]int{"ABC123": 300},
 			},
-			rateLimits: make(map[string]*RateLimit),
+			storage: testStorage,
 		}
 
 		for i := 0; i < 4; i++ {
@@ -322,12 +346,15 @@ func TestServiceCheckRateLimit(t *testing.T) {
 	})
 
 	t.Run("window_reset", func(t *testing.T) {
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
 		service := &Service{
-			config: Config{
+			config: storage.Config{
 				IPRateLimit: 1,
 				IPBlockTime: 1,
 			},
-			rateLimits: make(map[string]*RateLimit),
+			storage: testStorage,
 		}
 
 		allowed, err := service.CheckRateLimit("192.168.1.3", false)
@@ -338,7 +365,8 @@ func TestServiceCheckRateLimit(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, allowed)
 
-		service.rateLimits["192.168.1.3"].LastReset = time.Now().Add(-2 * time.Second)
+		// Wait for window reset
+		time.Sleep(1100 * time.Millisecond)
 
 		allowed, err = service.CheckRateLimit("192.168.1.3", false)
 		require.NoError(t, err)
@@ -346,12 +374,15 @@ func TestServiceCheckRateLimit(t *testing.T) {
 	})
 
 	t.Run("concurrent_safety", func(t *testing.T) {
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
 		service := &Service{
-			config: Config{
+			config: storage.Config{
 				IPRateLimit: 100,
 				IPBlockTime: 300,
 			},
-			rateLimits: make(map[string]*RateLimit),
+			storage: testStorage,
 		}
 
 		done := make(chan bool, 10)
@@ -367,19 +398,29 @@ func TestServiceCheckRateLimit(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			<-done
 		}
-
-		rateLimit := service.rateLimits["concurrent-test"]
-		assert.Equal(t, 100, rateLimit.Count)
 	})
 }
 
 func BenchmarkServiceCheckRateLimit(b *testing.B) {
+	config := ratelimiter.StorageConfig{
+		Host:     "localhost",
+		Port:     "6379",
+		Password: "",
+		DB:       1,
+	}
+
+	redisStorage, err := storage.NewRedisStorage(config)
+	if err != nil {
+		b.Skip("Redis not available for benchmarking")
+	}
+	defer redisStorage.Close()
+
 	service := &Service{
-		config: Config{
+		config: storage.Config{
 			IPRateLimit: 1000000,
 			IPBlockTime: 300,
 		},
-		rateLimits: make(map[string]*RateLimit),
+		storage: redisStorage,
 	}
 
 	b.ResetTimer()
@@ -392,7 +433,7 @@ func BenchmarkServiceCheckRateLimit(b *testing.B) {
 
 func BenchmarkServiceGetLimit(b *testing.B) {
 	service := &Service{
-		config: Config{
+		config: storage.Config{
 			IPRateLimit: 10,
 			TokenLimits: map[string]int{
 				"ABC123": 100,

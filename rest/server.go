@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"rate-limiter/middleware"
+	"rate-limiter/storage"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -54,7 +55,7 @@ func loadTestHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"message": "Load test endpoint", "timestamp": "%s", "client_ip": "%s"}`, time.Now().Format(time.RFC3339), r.RemoteAddr)
 }
 
-func GetServerPort(config middleware.Config) string {
+func GetServerPort(config storage.Config) string {
 	if config.ServerPort != "" {
 		return config.ServerPort
 	}

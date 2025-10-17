@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	ratelimiter "rate-limiter"
+	"rate-limiter/storage"
 	"testing"
 	"time"
 
@@ -205,26 +207,27 @@ func TestSendRateLimitError(t *testing.T) {
 }
 
 func TestRateLimiterMiddleware(t *testing.T) {
-	service := &Service{
-		config: Config{
-			IPRateLimit:     2,
-			IPBlockTime:     1,
-			TokenLimits:     map[string]int{"ABC123": 5},
-			TokenBlockTimes: map[string]int{"ABC123": 1},
-		},
-		rateLimits: make(map[string]*RateLimit),
-	}
-
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("success"))
 	})
 
-	middleware := RateLimiter(service)
-	handler := middleware(testHandler)
-
 	t.Run("within_limit", func(t *testing.T) {
-		service.rateLimits = make(map[string]*RateLimit)
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
+		service := &Service{
+			config: storage.Config{
+				IPRateLimit:     2,
+				IPBlockTime:     1,
+				TokenLimits:     map[string]int{"ABC123": 5},
+				TokenBlockTimes: map[string]int{"ABC123": 1},
+			},
+			storage: testStorage,
+		}
+
+		middleware := RateLimiter(service)
+		handler := middleware(testHandler)
 
 		req := httptest.NewRequest("GET", "/", nil)
 		req.RemoteAddr = "192.168.1.1:12345"
@@ -244,7 +247,21 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	})
 
 	t.Run("exceeds_limit", func(t *testing.T) {
-		service.rateLimits = make(map[string]*RateLimit)
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
+		service := &Service{
+			config: storage.Config{
+				IPRateLimit:     2,
+				IPBlockTime:     1,
+				TokenLimits:     map[string]int{"ABC123": 5},
+				TokenBlockTimes: map[string]int{"ABC123": 1},
+			},
+			storage: testStorage,
+		}
+
+		middleware := RateLimiter(service)
+		handler := middleware(testHandler)
 
 		for i := 0; i < 2; i++ {
 			req := httptest.NewRequest("GET", "/", nil)
@@ -269,7 +286,21 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	})
 
 	t.Run("token_higher_limit", func(t *testing.T) {
-		service.rateLimits = make(map[string]*RateLimit)
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
+		service := &Service{
+			config: storage.Config{
+				IPRateLimit:     2,
+				IPBlockTime:     1,
+				TokenLimits:     map[string]int{"ABC123": 5},
+				TokenBlockTimes: map[string]int{"ABC123": 1},
+			},
+			storage: testStorage,
+		}
+
+		middleware := RateLimiter(service)
+		handler := middleware(testHandler)
 
 		for i := 0; i < 4; i++ {
 			req := httptest.NewRequest("GET", "/", nil)
@@ -283,7 +314,21 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	})
 
 	t.Run("separate_ips", func(t *testing.T) {
-		service.rateLimits = make(map[string]*RateLimit)
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
+		service := &Service{
+			config: storage.Config{
+				IPRateLimit:     2,
+				IPBlockTime:     1,
+				TokenLimits:     map[string]int{"ABC123": 5},
+				TokenBlockTimes: map[string]int{"ABC123": 1},
+			},
+			storage: testStorage,
+		}
+
+		middleware := RateLimiter(service)
+		handler := middleware(testHandler)
 
 		for i := 0; i < 2; i++ {
 			req := httptest.NewRequest("GET", "/", nil)
@@ -307,7 +352,21 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	})
 
 	t.Run("window_reset", func(t *testing.T) {
-		service.rateLimits = make(map[string]*RateLimit)
+		testStorage := createTestStorage(t)
+		defer testStorage.Close()
+
+		service := &Service{
+			config: storage.Config{
+				IPRateLimit:     2,
+				IPBlockTime:     1,
+				TokenLimits:     map[string]int{"ABC123": 5},
+				TokenBlockTimes: map[string]int{"ABC123": 1},
+			},
+			storage: testStorage,
+		}
+
+		middleware := RateLimiter(service)
+		handler := middleware(testHandler)
 
 		for i := 0; i < 2; i++ {
 			req := httptest.NewRequest("GET", "/", nil)
@@ -334,16 +393,17 @@ func TestRateLimiterMiddleware(t *testing.T) {
 }
 
 func TestRateLimiterIntegrationWithChi(t *testing.T) {
-	// Create a service
+	testStorage := createTestStorage(t)
+	defer testStorage.Close()
+
 	service := &Service{
-		config: Config{
+		config: storage.Config{
 			IPRateLimit: 1,
 			IPBlockTime: 1,
 		},
-		rateLimits: make(map[string]*RateLimit),
+		storage: testStorage,
 	}
 
-	// Create Chi router with middleware
 	r := chi.NewRouter()
 	r.Use(RateLimiter(service))
 	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +411,6 @@ func TestRateLimiterIntegrationWithChi(t *testing.T) {
 		w.Write([]byte("test response"))
 	})
 
-	// Test the integration
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
 	w := httptest.NewRecorder()
@@ -360,7 +419,6 @@ func TestRateLimiterIntegrationWithChi(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "test response", w.Body.String())
 
-	// Second request should be blocked
 	req2 := httptest.NewRequest("GET", "/test", nil)
 	req2.RemoteAddr = "192.168.1.100:12345"
 	w2 := httptest.NewRecorder()
@@ -370,12 +428,25 @@ func TestRateLimiterIntegrationWithChi(t *testing.T) {
 }
 
 func BenchmarkRateLimiterMiddleware(b *testing.B) {
+	config := ratelimiter.StorageConfig{
+		Host:     "localhost",
+		Port:     "6379",
+		Password: "",
+		DB:       1,
+	}
+
+	redisStorage, err := storage.NewRedisStorage(config)
+	if err != nil {
+		b.Skip("Redis not available for benchmarking")
+	}
+	defer redisStorage.Close()
+
 	service := &Service{
-		config: Config{
-			IPRateLimit: 1000000, // Very high limit to avoid blocking
+		config: storage.Config{
+			IPRateLimit: 1000000,
 			IPBlockTime: 300,
 		},
-		rateLimits: make(map[string]*RateLimit),
+		storage: redisStorage,
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

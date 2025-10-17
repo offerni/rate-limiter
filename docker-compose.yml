@@ -1,6 +1,23 @@
 version: "3.8"
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rate-limiter-network
+
   rate-limiter:
     build: .
     ports:
@@ -18,8 +35,17 @@ services:
 
       # Server configuration
       - SERVER_PORT=8080
+      
+      # Redis configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
     volumes:
       - ./.env:/root/.env:ro
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
@@ -37,6 +63,9 @@ services:
       start_period: 10s
     networks:
       - rate-limiter-network
+
+volumes:
+  redis-data:
 
 networks:
   rate-limiter-network:

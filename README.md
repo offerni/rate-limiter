@@ -18,7 +18,7 @@ HTTP rate limiting middleware for Go applications using Chi router.
 1. **Construir e iniciar o container:**
 
    ```bash
-   docker-compose up --build
+   docker-compose up --build -d
    ```
 
 2. **Testar funcionalidade básica:**
@@ -114,7 +114,7 @@ docker-compose down
 1. **Build and start the container:**
 
    ```bash
-   docker-compose up --build
+   docker-compose up --build -d
    ```
 
 2. **Test basic functionality:**
@@ -197,20 +197,6 @@ docker-compose down
 ```
 
 ---
-
-## Estrutura do Projeto / Project Structure
-
-```
-├── middleware/
-│   ├── service.go       # Core rate limiting logic
-│   └── rate_limiter.go  # HTTP middleware
-├── cmd/
-│   ├── main.go          # Application entry point
-│   └── server.go        # Server setup and routes
-├── .env                 # Configuration
-├── Dockerfile           # Container definition
-└── docker-compose.yml   # Orchestration
-```
 
 ## Resposta de Erro / Error Response
 
